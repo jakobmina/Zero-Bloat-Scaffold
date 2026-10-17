@@ -13,14 +13,15 @@ VENV_PY         := $(VENV)/bin/python
 VENV_PIP        := $(VENV)/bin/pip
 # Read the project-local token at recipe time and expose it as KAGGLE_API_TOKEN
 # (the only env var the modern Kaggle CLI honours for token auth).
-KAGGLE          := KAGGLE_API_TOKEN=$$(cat .kaggle/access_token) $(VENV)/bin/kaggle
+KAGGLE          := KAGGLE_API_TOKEN=$$(cat .kaggle/access_token 2>/dev/null) $(VENV)/bin/kaggle
 FRAMEWORK_REPO  := https://github.com/arcprize/ARC-AGI-3-Agents.git
+FRAMEWORK_COMMIT:= 246e7f2238479e0a0dfbc0b9804e138a209ec00d
 FRAMEWORK_DIR   := vendor/ARC-AGI-3-Agents
 COMP_SLUG       := arc-prize-2026-arc-agi-3
 GAME            ?=
 STEPS           ?= 200
 
-.PHONY: help setup play-local pull-sample notebook submit status verify-local clean _check-kaggle
+.PHONY: help setup play-local pull-sample notebook submit status verify-local trace clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -29,24 +30,32 @@ _check-kaggle:
 	    echo "       and save it as a one-line file at: $(PWD)/.kaggle/access_token"; \
 	    exit 1; \
 	fi
+	@chmod 600 .kaggle/access_token 2>/dev/null || true
+	@PERM=$$(stat -c "%a" .kaggle/access_token 2>/dev/null || stat -f "%Lp" .kaggle/access_token 2>/dev/null); \
+	if [ $$(( 0$${PERM} & 077 )) -ne 0 ]; then \
+	    echo "ERROR: .kaggle/access_token has insecure permissions (mode $$PERM)."; \
+	    echo "       Group and public permissions must be removed (e.g., chmod 600 or 400)."; \
+	    exit 1; \
+	fi
 
 help:
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  %-15s %s\n",$$1,$$2}' $(MAKEFILE_LIST)
 	@echo ""
 	@echo "Vars: PYTHON=$(PYTHON)  GAME=$(GAME)  STEPS=$(STEPS)"
 
-setup: ## One-time install: venv, arc-agi, kaggle CLI, clone framework
+setup: ## One-time install: venv, arc-agi, kaggle CLI, clone framework pinned to commit
 	$(PYTHON) -m venv $(VENV)
 	$(VENV_PIP) install --upgrade pip
-	$(VENV_PIP) install "arc-agi>=0.9.6" "kaggle>=2.2" python-dotenv pandas pyarrow
+	$(VENV_PIP) install "arc-agi>=0.9.6" "kaggle>=2.2" python-dotenv pandas pyarrow pre-commit detect-secrets nbstripout pip-audit numpy
 	@if [ ! -d "$(FRAMEWORK_DIR)/.git" ]; then \
-	    mkdir -p vendor && git clone --depth 1 $(FRAMEWORK_REPO) $(FRAMEWORK_DIR); \
+	    mkdir -p vendor && git clone $(FRAMEWORK_REPO) $(FRAMEWORK_DIR) && git -C $(FRAMEWORK_DIR) checkout $(FRAMEWORK_COMMIT); \
 	else \
-	    git -C $(FRAMEWORK_DIR) pull --ff-only; \
+	    git -C $(FRAMEWORK_DIR) fetch origin && git -C $(FRAMEWORK_DIR) checkout $(FRAMEWORK_COMMIT); \
 	fi
 	@# Slim agents/__init__.py so we don't need langgraph/langsmith/smolagents/etc.
 	@# (Same trick the official Stochastic Goose sample uses on Kaggle.)
 	@$(VENV_PY) scripts/slim_framework.py
+	@$(VENV_PY) -m pre_commit install
 	@echo ""
 	@echo "Setup complete. Try:  make play-local"
 
@@ -55,6 +64,9 @@ play-local: ## Run agent/my_agent.py against ALL games (or GAME=ls20 for a singl
 
 verify-local: ## Quick smoke test: 50 steps on ls20 + vc33 only
 	$(VENV_PY) scripts/play_local.py --game ls20,vc33 --max-steps 50
+
+trace: ## Run mycelium trace diagnostic script
+	$(VENV_PY) scripts/trace_mycelium.py --steps $(STEPS)
 
 list-games: ## Show all available games
 	$(VENV_PY) scripts/play_local.py --list
@@ -82,4 +94,4 @@ status: _check-kaggle ## Show the status of your most recent Kaggle kernel run
 
 clean: ## Remove generated artefacts (venv, downloaded games, vendored repos)
 	rm -rf $(VENV) vendor environment_files recordings notebooks/submission.ipynb \
-	       reference logs.log __pycache__ .pytest_cache
+	       reference logs.log __pycache__ .pytest_cache h7_logs .secrets.baseline

@@ -1,0 +1,20 @@
+# Python / Environment
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Credentials & API Keys
+.kaggle/
+
+# Output directories & artifacts
+h7_logs/
+environment_files/
+recordings/
+reference/
+notebooks/submission.ipynb
+.ipynb_checkpoints/
+
+# Vendored external repositories
+vendor/
